@@ -1,0 +1,16 @@
+# Packer compiled file (regenerated on each machine)
+plugin/packer_compiled.lua
+
+# Undo history
+undo/
+
+# Swap/backup files
+*.swp
+*.swo
+*~
+
+# Session files
+Session.vim
+
+# Local machine-specific overrides (optional)
+lua/local.lua
