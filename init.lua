@@ -110,6 +110,14 @@ require('packer').startup(function(use)
     end
   }
 
+  -- Generate GitHub/GitLab/etc. links for current file + line range
+  use {
+    'linrongbin16/gitlinker.nvim',
+    config = function()
+      require('gitlinker').setup()
+    end
+  }
+
   -- Diffview for viewing git diffs
   use {
     'sindrets/diffview.nvim',
@@ -136,7 +144,16 @@ require('packer').startup(function(use)
               if view then
                 local file = view:infer_cur_file()
                 if file then
-                  local path = file.path
+                  -- Use absolute_path if available, otherwise construct it from adapter ctx
+                  local path = file.absolute_path
+                  if not path then
+                    local adapter = view.adapter
+                    if adapter and adapter.ctx and adapter.ctx.toplevel then
+                      path = adapter.ctx.toplevel .. '/' .. file.path
+                    else
+                      path = file.path
+                    end
+                  end
                   vim.cmd('DiffviewClose')
                   vim.schedule(function()
                     vim.cmd('edit ' .. vim.fn.fnameescape(path))
@@ -148,6 +165,35 @@ require('packer').startup(function(use)
         },
       })
     end
+  }
+
+  -- Inline unified diff viewer (used by wt's live diff view: `:Unified <base>`)
+  use {
+    'axkirillov/unified.nvim',
+    config = function()
+      require('unified').setup()
+    end
+  }
+
+  -- Markdown + Mermaid rendering
+  use {
+    'MeanderingProgrammer/render-markdown.nvim',
+    requires = { 'nvim-treesitter/nvim-treesitter' },
+  }
+  use {
+    'cavanaug/render-markdown-mermaid.nvim',
+    requires = {
+      'nvim-treesitter/nvim-treesitter',
+      'MeanderingProgrammer/render-markdown.nvim',
+    },
+    config = function()
+      require('render-markdown-mermaid').setup({})
+    end,
+  }
+  use {
+    'nvim-treesitter/nvim-treesitter',
+    tag = 'v0.10.0',
+    run = ':TSUpdate markdown markdown_inline',
   }
 
   -- LSP Support
@@ -187,6 +233,25 @@ vim.api.nvim_create_autocmd({ 'FocusGained', 'BufEnter' }, {
   pattern = '*',
   command = 'checktime',
 })
+
+-- Notes: auto-commit on save (non-blocking)
+vim.api.nvim_create_autocmd('BufWritePost', {
+  pattern = vim.fn.expand('~') .. '/workspace/notes/*',
+  callback = function()
+    vim.fn.jobstart(
+      'cd ~/workspace/notes && git add -A && git commit -m "auto" 2>/dev/null',
+      { detach = true }
+    )
+  end,
+})
+
+-- Notes: :Note [title] command and <leader>nn to create new note
+vim.api.nvim_create_user_command('Note', function(opts)
+  local title = opts.args ~= '' and '-' .. opts.args:gsub('%s+', '-'):lower() or ''
+  local filename = os.date('%Y%m%d-%H%M%S') .. title .. '.md'
+  vim.cmd('edit ' .. vim.fn.expand('~/workspace/notes/') .. filename)
+end, { nargs = '*' })
+vim.keymap.set('n', '<leader>nn', ':Note ', { desc = 'New note' })
 
 -- Buffer navigation (single-view philosophy)
 vim.keymap.set('n', '<leader>bn', ':bn<CR>', { desc = 'Next buffer' })
@@ -300,27 +365,29 @@ if ok_mason then
     ensure_installed = { 'pyright', 'ts_ls' },
   })
 
-  local lspconfig = require('lspconfig')
   local capabilities = require('cmp_nvim_lsp').default_capabilities()
 
   -- LSP keybindings (set when LSP attaches to buffer)
-  local on_attach = function(client, bufnr)
-    local opts = { buffer = bufnr, silent = true }
-    vim.keymap.set('n', 'gd', ':Telescope lsp_definitions<CR>', vim.tbl_extend('force', opts, { desc = 'Go to definition' }))
-    vim.keymap.set('n', 'gr', ':Telescope lsp_references<CR>', vim.tbl_extend('force', opts, { desc = 'Find references' }))
-    vim.keymap.set('n', 'gD', vim.lsp.buf.declaration, vim.tbl_extend('force', opts, { desc = 'Go to declaration' }))
-    vim.keymap.set('n', 'gi', ':Telescope lsp_implementations<CR>', vim.tbl_extend('force', opts, { desc = 'Go to implementation' }))
-    vim.keymap.set('n', 'K', vim.lsp.buf.hover, vim.tbl_extend('force', opts, { desc = 'Hover docs' }))
-    vim.keymap.set('n', '<leader>rn', vim.lsp.buf.rename, vim.tbl_extend('force', opts, { desc = 'Rename symbol' }))
-    vim.keymap.set('n', '<leader>ca', vim.lsp.buf.code_action, vim.tbl_extend('force', opts, { desc = 'Code action' }))
-    vim.keymap.set('n', '<leader>ds', ':Telescope lsp_document_symbols<CR>', vim.tbl_extend('force', opts, { desc = 'Document symbols' }))
-    vim.keymap.set('n', '[d', vim.diagnostic.goto_prev, vim.tbl_extend('force', opts, { desc = 'Previous diagnostic' }))
-    vim.keymap.set('n', ']d', vim.diagnostic.goto_next, vim.tbl_extend('force', opts, { desc = 'Next diagnostic' }))
-  end
+  vim.api.nvim_create_autocmd('LspAttach', {
+    callback = function(args)
+      local opts = { buffer = args.buf, silent = true }
+      vim.keymap.set('n', 'gd', ':Telescope lsp_definitions<CR>', vim.tbl_extend('force', opts, { desc = 'Go to definition' }))
+      vim.keymap.set('n', 'gr', ':Telescope lsp_references<CR>', vim.tbl_extend('force', opts, { desc = 'Find references' }))
+      vim.keymap.set('n', 'gD', vim.lsp.buf.declaration, vim.tbl_extend('force', opts, { desc = 'Go to declaration' }))
+      vim.keymap.set('n', 'gi', ':Telescope lsp_implementations<CR>', vim.tbl_extend('force', opts, { desc = 'Go to implementation' }))
+      vim.keymap.set('n', 'K', vim.lsp.buf.hover, vim.tbl_extend('force', opts, { desc = 'Hover docs' }))
+      vim.keymap.set('n', '<leader>rn', vim.lsp.buf.rename, vim.tbl_extend('force', opts, { desc = 'Rename symbol' }))
+      vim.keymap.set('n', '<leader>ca', vim.lsp.buf.code_action, vim.tbl_extend('force', opts, { desc = 'Code action' }))
+      vim.keymap.set('n', '<leader>ds', ':Telescope lsp_document_symbols<CR>', vim.tbl_extend('force', opts, { desc = 'Document symbols' }))
+      vim.keymap.set('n', '[d', vim.diagnostic.goto_prev, vim.tbl_extend('force', opts, { desc = 'Previous diagnostic' }))
+      vim.keymap.set('n', ']d', vim.diagnostic.goto_next, vim.tbl_extend('force', opts, { desc = 'Next diagnostic' }))
+    end,
+  })
 
-  -- Configure language servers
-  lspconfig.pyright.setup({ capabilities = capabilities, on_attach = on_attach })
-  lspconfig.ts_ls.setup({ capabilities = capabilities, on_attach = on_attach })
+  -- Configure language servers using vim.lsp.config (nvim 0.11+)
+  vim.lsp.config('pyright', { capabilities = capabilities })
+  vim.lsp.config('ts_ls', { capabilities = capabilities })
+  vim.lsp.enable({ 'pyright', 'ts_ls' })
 end
 
 -- Autocompletion setup
@@ -379,11 +446,140 @@ vim.keymap.set('n', '<leader>fc', ':Telescope live_grep<CR>', { desc = 'Search f
 -- Claude Code
 vim.keymap.set('n', '<leader>cc', ':ClaudeCode<CR>', { desc = 'Claude Code' })
 
+-- Git repo picker for multi-repo workspaces
+local function find_git_repos(dir)
+  local repos = {}
+
+  -- Check if cwd itself is a git repo
+  local cwd_git = dir .. '/.git'
+  if vim.loop.fs_stat(cwd_git) then
+    table.insert(repos, { name = '.', path = dir })
+  end
+
+  -- Scan subdirectories for git repos
+  local handle = vim.loop.fs_scandir(dir)
+  if handle then
+    while true do
+      local name, type = vim.loop.fs_scandir_next(handle)
+      if not name then break end
+      if type == 'directory' and not name:match('^%.') then
+        local subdir = dir .. '/' .. name
+        local git_dir = subdir .. '/.git'
+        if vim.loop.fs_stat(git_dir) then
+          table.insert(repos, { name = name, path = subdir })
+        end
+      end
+    end
+  end
+
+  table.sort(repos, function(a, b) return a.name < b.name end)
+  return repos
+end
+
+local function open_diffview_with_repo_picker()
+  local cwd = vim.fn.getcwd()
+  local repos = find_git_repos(cwd)
+
+  if #repos == 0 then
+    vim.notify('No git repositories found in ' .. cwd, vim.log.levels.WARN)
+    return
+  end
+
+  if #repos == 1 then
+    vim.cmd('DiffviewOpen -C' .. vim.fn.fnameescape(repos[1].path))
+    return
+  end
+
+  local pickers = require('telescope.pickers')
+  local finders = require('telescope.finders')
+  local conf = require('telescope.config').values
+  local actions = require('telescope.actions')
+  local action_state = require('telescope.actions.state')
+
+  pickers.new({}, {
+    prompt_title = 'Select Git Repository',
+    finder = finders.new_table({
+      results = repos,
+      entry_maker = function(entry)
+        return {
+          value = entry,
+          display = entry.name,
+          ordinal = entry.name,
+        }
+      end,
+    }),
+    sorter = conf.generic_sorter({}),
+    attach_mappings = function(prompt_bufnr, map)
+      actions.select_default:replace(function()
+        actions.close(prompt_bufnr)
+        local selection = action_state.get_selected_entry()
+        if selection then
+          vim.cmd('DiffviewOpen -C' .. vim.fn.fnameescape(selection.value.path))
+        end
+      end)
+      return true
+    end,
+  }):find()
+end
+
+local function open_file_history_with_repo_picker()
+  local cwd = vim.fn.getcwd()
+  local repos = find_git_repos(cwd)
+
+  if #repos == 0 then
+    vim.notify('No git repositories found in ' .. cwd, vim.log.levels.WARN)
+    return
+  end
+
+  if #repos == 1 then
+    vim.cmd('DiffviewFileHistory -C' .. vim.fn.fnameescape(repos[1].path))
+    return
+  end
+
+  local pickers = require('telescope.pickers')
+  local finders = require('telescope.finders')
+  local conf = require('telescope.config').values
+  local actions = require('telescope.actions')
+  local action_state = require('telescope.actions.state')
+
+  pickers.new({}, {
+    prompt_title = 'Select Git Repository for History',
+    finder = finders.new_table({
+      results = repos,
+      entry_maker = function(entry)
+        return {
+          value = entry,
+          display = entry.name,
+          ordinal = entry.name,
+        }
+      end,
+    }),
+    sorter = conf.generic_sorter({}),
+    attach_mappings = function(prompt_bufnr, map)
+      actions.select_default:replace(function()
+        actions.close(prompt_bufnr)
+        local selection = action_state.get_selected_entry()
+        if selection then
+          vim.cmd('DiffviewFileHistory -C' .. vim.fn.fnameescape(selection.value.path))
+        end
+      end)
+      return true
+    end,
+  }):find()
+end
+
 -- Diffview keymaps
-vim.keymap.set('n', '<leader>gd', ':DiffviewOpen<CR>', { desc = 'Open diff view' })
+vim.keymap.set('n', '<leader>gd', require('unified').toggle, { desc = 'Toggle unified diff' })
+vim.keymap.set('n', '<leader>gD', open_diffview_with_repo_picker, { desc = 'Open diffview (side-by-side)' })
 vim.keymap.set('n', '<leader>gc', ':DiffviewClose<CR>', { desc = 'Close diff view' })
-vim.keymap.set('n', '<leader>gh', ':DiffviewFileHistory %<CR>', { desc = 'File history (current)' })
-vim.keymap.set('n', '<leader>gH', ':DiffviewFileHistory<CR>', { desc = 'File history (branch)' })
+vim.keymap.set('n', '<leader>gh', open_file_history_with_repo_picker, { desc = 'File history' })
+vim.keymap.set('n', '<leader>gH', open_file_history_with_repo_picker, { desc = 'File history' })
+
+-- GitHub links
+vim.keymap.set({ 'n', 'v' }, '<leader>gl', ':GitLink<CR>', { silent = true, desc = 'Copy git link' })
+vim.keymap.set({ 'n', 'v' }, '<leader>gL', ':GitLink!<CR>', { silent = true, desc = 'Open git link' })
+vim.keymap.set({ 'n', 'v' }, '<leader>gb', ':GitLink blame<CR>', { silent = true, desc = 'Copy git blame link' })
+vim.keymap.set({ 'n', 'v' }, '<leader>gB', ':GitLink! blame<CR>', { silent = true, desc = 'Open git blame link' })
 
 -- Transparent background
 vim.api.nvim_set_hl(0, 'Normal', { bg = 'NONE' })
